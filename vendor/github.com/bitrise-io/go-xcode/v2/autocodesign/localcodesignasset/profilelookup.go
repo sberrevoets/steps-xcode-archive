@@ -11,8 +11,17 @@ import (
 )
 
 func findProfile(localProfiles []profileutil.ProvisioningProfileInfoModel, platform autocodesign.Platform, distributionType autocodesign.DistributionType, bundleID string, entitlements autocodesign.Entitlements, minProfileDaysValid int, certSerials []string, deviceUDIDs []string) *profileutil.ProvisioningProfileInfoModel {
+	// First try exact matching
 	for _, profile := range localProfiles {
 		if isProfileMatching(profile, platform, distributionType, bundleID, entitlements, minProfileDaysValid, certSerials, deviceUDIDs) {
+			return &profile
+		}
+	}
+
+	// If exact matching fails, try to find a profile that supports additional capabilities
+	// This helps with SPM dependencies that may add entitlements during build
+	for _, profile := range localProfiles {
+		if isProfileMatchingWithSuperset(profile, platform, distributionType, bundleID, entitlements, minProfileDaysValid, certSerials, deviceUDIDs) {
 			return &profile
 		}
 	}
@@ -99,6 +108,78 @@ func containsAllAppEntitlements(profile profileutil.ProvisioningProfileInfoModel
 	}
 
 	return !hasMissingEntitlement
+}
+
+// isProfileMatchingWithSuperset checks if a profile can satisfy the app's entitlements,
+// allowing the profile to have additional capabilities that aren't in the app entitlements.
+// This is useful when SPM dependencies may add entitlements during build that weren't
+// detected during the project analysis phase.
+func isProfileMatchingWithSuperset(profile profileutil.ProvisioningProfileInfoModel, platform autocodesign.Platform, distributionType autocodesign.DistributionType, bundleID string, entitlements autocodesign.Entitlements, minProfileDaysValid int, certSerials []string, deviceUDIDs []string) bool {
+	if !isActive(profile, minProfileDaysValid) {
+		return false
+	}
+
+	if !hasMatchingDistributionType(profile, distributionType) {
+		return false
+	}
+
+	if !hasMatchingBundleID(profile, bundleID) {
+		return false
+	}
+
+	if !hasMatchingPlatform(profile, platform) {
+		return false
+	}
+
+	if !hasMatchingLocalCertificates(profile, certSerials) {
+		return false
+	}
+
+	// More permissive entitlements check - profile can have additional capabilities
+	if !profileSupportsAppEntitlements(profile, entitlements) {
+		return false
+	}
+
+	if !provisionsDevices(profile, deviceUDIDs) {
+		return false
+	}
+
+	return true
+}
+
+// profileSupportsAppEntitlements checks if the profile's entitlements are compatible with
+// the app's entitlements, allowing the profile to have additional capabilities.
+func profileSupportsAppEntitlements(profile profileutil.ProvisioningProfileInfoModel, appEntitlements autocodesign.Entitlements) bool {
+	profileEntitlements := autocodesign.Entitlements(profile.Entitlements)
+
+	// Check that all app entitlements are present in the profile
+	for key, value := range appEntitlements {
+		profileEntitlementValue := profileEntitlements[key]
+
+		if key == autocodesign.ICloudIdentifiersEntitlementKey {
+			missingContainers, err := autocodesign.FindMissingContainers(appEntitlements, profileEntitlements)
+			if err != nil || len(missingContainers) > 0 {
+				return false
+			}
+		} else if !reflect.DeepEqual(profileEntitlementValue, value) {
+			// If the app requires an entitlement but the profile doesn't have it, reject
+			if profileEntitlementValue == nil {
+				return false
+			}
+			// For boolean entitlements, profile must be true if app requires true
+			if appBool, ok := value.(bool); ok {
+				if profileBool, ok := profileEntitlementValue.(bool); ok {
+					if appBool && !profileBool {
+						return false
+					}
+				}
+			} else if !reflect.DeepEqual(profileEntitlementValue, value) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func hasMatchingDistributionType(profile profileutil.ProvisioningProfileInfoModel, distributionType autocodesign.DistributionType) bool {
