@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/bitrise-io/go-utils/pathutil"
 	"github.com/bitrise-io/go-xcode/plistutil"
@@ -332,6 +333,12 @@ func (archive IosArchive) BundleIDEntitlementsMap() map[string]plistutil.PlistDa
 		bundleIDEntitlementsMap[bundleID] = clipApplication.Entitlements
 	}
 
+	// Add SPM and embedded frameworks that require signing
+	frameworkEntitlements := archive.getFrameworkBundleIDEntitlements()
+	for bundleID, entitlements := range frameworkEntitlements {
+		bundleIDEntitlementsMap[bundleID] = entitlements
+	}
+
 	return bundleIDEntitlementsMap
 }
 
@@ -366,6 +373,12 @@ func (archive IosArchive) BundleIDProfileInfoMap() map[string]profileutil.Provis
 		bundleIDProfileMap[bundleID] = clipApplication.ProvisioningProfile
 	}
 
+	// Add SPM and embedded frameworks that have provisioning profiles
+	frameworkProfiles := archive.getFrameworkBundleIDProfiles()
+	for bundleID, profile := range frameworkProfiles {
+		bundleIDProfileMap[bundleID] = profile
+	}
+
 	return bundleIDProfileMap
 }
 
@@ -381,4 +394,116 @@ func (archive IosArchive) TeamID() (string, error) {
 		return profileInfo.TeamID, nil
 	}
 	return "", errors.New("team id not found")
+}
+
+// getFrameworkBundleIDEntitlements scans the archive for SPM and embedded frameworks that require signing
+func (archive IosArchive) getFrameworkBundleIDEntitlements() map[string]plistutil.PlistData {
+	frameworkEntitlements := map[string]plistutil.PlistData{}
+	
+	// Check Frameworks directory in the main application
+	frameworksPath := filepath.Join(archive.Application.Path, "Frameworks")
+	if exist, err := pathutil.IsPathExists(frameworksPath); err == nil && exist {
+		pattern := filepath.Join(pathutil.EscapeGlobPath(frameworksPath), "*.framework")
+		frameworks, err := filepath.Glob(pattern)
+		if err == nil {
+			for _, frameworkPath := range frameworks {
+				if bundleID, entitlements := archive.extractFrameworkInfo(frameworkPath); bundleID != "" {
+					frameworkEntitlements[bundleID] = entitlements
+				}
+			}
+		}
+	}
+	
+	return frameworkEntitlements
+}
+
+// extractFrameworkInfo extracts bundle ID and entitlements from a framework if it has a provisioning profile
+func (archive IosArchive) extractFrameworkInfo(frameworkPath string) (string, plistutil.PlistData) {
+	// Check if framework has embedded.mobileprovision (indicating it requires signing)
+	provisioningProfilePath := filepath.Join(frameworkPath, "embedded.mobileprovision")
+	if exist, err := pathutil.IsPathExists(provisioningProfilePath); err != nil || !exist {
+		return "", nil
+	}
+	
+	// Read Info.plist to get bundle identifier
+	infoPlistPath := filepath.Join(frameworkPath, "Info.plist")
+	if exist, err := pathutil.IsPathExists(infoPlistPath); err != nil || !exist {
+		return "", nil
+	}
+	
+	infoPlist, err := plistutil.NewPlistDataFromFile(infoPlistPath)
+	if err != nil {
+		return "", nil
+	}
+	
+	bundleID, ok := infoPlist.GetString("CFBundleIdentifier")
+	if !ok || bundleID == "" {
+		return "", nil
+	}
+	
+	// Try to get entitlements from the framework executable
+	frameworkName := filepath.Base(frameworkPath)
+	frameworkName = strings.TrimSuffix(frameworkName, ".framework")
+	entitlements, err := getEntitlements(frameworkPath, frameworkName)
+	if err != nil {
+		// If we can't get entitlements, return empty entitlements but still include the bundle ID
+		// This is important for frameworks that need provisioning profiles but don't have entitlements
+		entitlements = plistutil.PlistData{}
+	}
+	
+	return bundleID, entitlements
+}
+
+// getFrameworkBundleIDProfiles scans the archive for SPM and embedded frameworks that have provisioning profiles
+func (archive IosArchive) getFrameworkBundleIDProfiles() map[string]profileutil.ProvisioningProfileInfoModel {
+	frameworkProfiles := map[string]profileutil.ProvisioningProfileInfoModel{}
+	
+	// Check Frameworks directory in the main application
+	frameworksPath := filepath.Join(archive.Application.Path, "Frameworks")
+	if exist, err := pathutil.IsPathExists(frameworksPath); err == nil && exist {
+		pattern := filepath.Join(pathutil.EscapeGlobPath(frameworksPath), "*.framework")
+		frameworks, err := filepath.Glob(pattern)
+		if err == nil {
+			for _, frameworkPath := range frameworks {
+				if bundleID, profile := archive.extractFrameworkProfileInfo(frameworkPath); bundleID != "" {
+					frameworkProfiles[bundleID] = profile
+				}
+			}
+		}
+	}
+	
+	return frameworkProfiles
+}
+
+// extractFrameworkProfileInfo extracts bundle ID and provisioning profile from a framework
+func (archive IosArchive) extractFrameworkProfileInfo(frameworkPath string) (string, profileutil.ProvisioningProfileInfoModel) {
+	// Check if framework has embedded.mobileprovision
+	provisioningProfilePath := filepath.Join(frameworkPath, "embedded.mobileprovision")
+	if exist, err := pathutil.IsPathExists(provisioningProfilePath); err != nil || !exist {
+		return "", profileutil.ProvisioningProfileInfoModel{}
+	}
+	
+	// Read Info.plist to get bundle identifier
+	infoPlistPath := filepath.Join(frameworkPath, "Info.plist")
+	if exist, err := pathutil.IsPathExists(infoPlistPath); err != nil || !exist {
+		return "", profileutil.ProvisioningProfileInfoModel{}
+	}
+	
+	infoPlist, err := plistutil.NewPlistDataFromFile(infoPlistPath)
+	if err != nil {
+		return "", profileutil.ProvisioningProfileInfoModel{}
+	}
+	
+	bundleID, ok := infoPlist.GetString("CFBundleIdentifier")
+	if !ok || bundleID == "" {
+		return "", profileutil.ProvisioningProfileInfoModel{}
+	}
+	
+	// Read the provisioning profile
+	profile, err := profileutil.NewProvisioningProfileInfoFromFile(provisioningProfilePath)
+	if err != nil {
+		return "", profileutil.ProvisioningProfileInfoModel{}
+	}
+	
+	return bundleID, profile
 }
