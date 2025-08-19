@@ -376,6 +376,7 @@ func (s XcodebuildArchiver) Run(opts RunOpts) (RunResult, error) {
 		// Specifying a scheme is required for workspaces
 		resolveDepsCmd := xcodebuild.NewResolvePackagesCommandModel(opts.ProjectPath, opts.Scheme, opts.Configuration)
 		resolveDepsCmd.SetCustomOptions(opts.XcodebuildAdditionalOptions)
+		s.logger.Printf("Running xcodebuild command: %s", resolveDepsCmd.PrintableCmd())
 		if err := resolveDepsCmd.Run(); err != nil {
 			s.logger.Warnf("%s", err)
 		}
@@ -387,6 +388,7 @@ func (s XcodebuildArchiver) Run(opts RunOpts) (RunResult, error) {
 		cmdModel := xcodebuild.NewShowBuildSettingsCommand(opts.ProjectPath)
 		cmdModel.SetScheme(opts.Scheme)
 		cmdModel.SetConfiguration(opts.Configuration)
+		s.logger.Printf("Running xcodebuild command: %s", cmdModel.PrintableCmd())
 		settings, err := cmdModel.RunAndReturnSettings()
 		if err != nil {
 			return out, fmt.Errorf("failed to read build settings: %w", err)
