@@ -59,6 +59,12 @@ func (m *ResolvePackagesCommandModel) cmdSlice() []string {
 	return slice
 }
 
+// PrintableCmd returns the printable command string
+func (m *ResolvePackagesCommandModel) PrintableCmd() string {
+	cmdSlice := m.cmdSlice()
+	return command.PrintableCommandArgs(false, cmdSlice)
+}
+
 // Command returns the executable command
 func (m *ResolvePackagesCommandModel) command() command.Model {
 	cmdSlice := m.cmdSlice()
