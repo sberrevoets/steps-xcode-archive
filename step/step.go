@@ -370,17 +370,6 @@ func (s XcodebuildArchiver) Run(opts RunOpts) (RunResult, error) {
 
 	s.logger.Println()
 
-	if opts.XcodeMajorVersion >= 11 {
-		s.logger.Infof("Running resolve Swift package dependencies")
-		// Resolve Swift package dependencies, so running -showBuildSettings later is faster later
-		// Specifying a scheme is required for workspaces
-		resolveDepsCmd := xcodebuild.NewResolvePackagesCommandModel(opts.ProjectPath, opts.Scheme, opts.Configuration)
-		resolveDepsCmd.SetCustomOptions(opts.XcodebuildAdditionalOptions)
-		s.logger.Printf("Running xcodebuild command: %s", resolveDepsCmd.PrintableCmd())
-		if err := resolveDepsCmd.Run(); err != nil {
-			s.logger.Warnf("%s", err)
-		}
-	}
 
 	if opts.ArtifactName == "" {
 		s.logger.Infof("Looking for artifact name as field is empty")
